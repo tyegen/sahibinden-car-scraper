@@ -325,6 +325,27 @@ const crawler = new PuppeteerCrawler({
         await randomDelay(2000, 5000);
 
         try {
+            // Check for Sahibinden's internal /cs/tloading redirect challenge
+            let currentUrl = page.url();
+            let pageTitle = await page.title().catch(() => '');
+
+            if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) {
+                log.warning('Detected /cs/tloading intermediate page. Waiting for automatic redirect...');
+                // Wait for JS execution and redirect
+                await randomDelay(5000, 10000);
+
+                // Wait for the actual navigation back to the content page
+                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => { });
+
+                currentUrl = page.url();
+                if (currentUrl.includes('/cs/tloading')) {
+                    log.error('Still stuck on /cs/tloading page after timeout.');
+                    if (session) session.markBad();
+                    throw new Error('Stuck on /cs/tloading page');
+                }
+                log.info(`Successfully passed /cs/tloading. Now on: ${currentUrl}`);
+            }
+
             // Additional Cloudflare check on page content
             const pageContent = await page.content();
             if (
