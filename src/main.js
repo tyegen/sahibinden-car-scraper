@@ -347,12 +347,12 @@ const crawler = new PuppeteerCrawler({
             let currentUrl = page.url();
             let pageTitle = await page.title().catch(() => '');
 
-            if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) {
-                log.warning('Detected /cs/tloading intermediate page. Waiting for automatic redirect...');
+            if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) {
+                log.warning('Detected /cs/tloading or /cs/checkLoading intermediate page. Waiting for automatic redirect...');
 
                 // Wait for up to 30 seconds for the URL to change
                 let waited = 0;
-                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) && waited < 30) {
+                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) && waited < 30) {
                     await randomDelay(1000, 1500); // Wait 1-1.5 seconds
 
                     // Periodically try to click "Devam Et" button if it appears on this page
@@ -376,17 +376,17 @@ const crawler = new PuppeteerCrawler({
                     waited++;
                 }
 
-                if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) {
-                    log.error('Still stuck on /cs/tloading page after timeout.');
+                if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) {
+                    log.error('Still stuck on intermediate page after timeout.');
 
                     // DEBUG: Log the final state before failing
                     const pageBody = await page.$eval('body', el => el.innerHTML.substring(0, 1000)).catch(() => 'No Body');
-                    log.error('Final tloading HTML state:', { html: pageBody });
+                    log.error('Final intermediate HTML state:', { html: pageBody });
 
                     if (session) session.markBad();
-                    throw new Error('Stuck on /cs/tloading page');
+                    throw new Error('Stuck on intermediate loading page');
                 }
-                log.info(`Successfully passed /cs/tloading. Now on: ${currentUrl}`);
+                log.info(`Successfully passed intermediate page. Now on: ${currentUrl}`);
             }
 
             // Check for "Devam Et" button challenge
@@ -491,12 +491,12 @@ async function handleCategoryPage(page, request, enqueueLinks) {
             let currentUrl = page.url();
             let pageTitle = await page.title().catch(() => '');
 
-            if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) {
-                log.warning('Detected /cs/tloading redirect during selector wait. Waiting for resolution...');
+            if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) {
+                log.warning('Detected intermediate redirect during selector wait. Waiting for resolution...');
 
                 // Wait up to 30s
                 let waited = 0;
-                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) && waited < 30) {
+                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) && waited < 30) {
                     await randomDelay(1000, 1500);
                     currentUrl = page.url();
                     pageTitle = await page.title().catch(() => '');
