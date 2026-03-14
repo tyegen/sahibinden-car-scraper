@@ -349,15 +349,40 @@ const crawler = new PuppeteerCrawler({
 
             if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) {
                 log.warning('Detected /cs/tloading intermediate page. Waiting for automatic redirect...');
-                // Wait for JS execution and redirect
-                await randomDelay(5000, 10000);
 
-                // Wait for the actual navigation back to the content page
-                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => { });
+                // Wait for up to 30 seconds for the URL to change
+                let waited = 0;
+                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) && waited < 30) {
+                    await randomDelay(1000, 1500); // Wait 1-1.5 seconds
 
-                currentUrl = page.url();
-                if (currentUrl.includes('/cs/tloading')) {
+                    // Periodically try to click "Devam Et" button if it appears on this page
+                    try {
+                        const devamEtClicked = await page.evaluate(() => {
+                            const buttons = Array.from(document.querySelectorAll('button, a, input[type=\"submit\"], div'));
+                            const targetBtn = buttons.find(b => b.textContent && b.textContent.includes('Devam Et'));
+                            if (targetBtn) {
+                                targetBtn.click();
+                                return true;
+                            }
+                            return false;
+                        });
+                        if (devamEtClicked) {
+                            log.info('Clicked \"Devam Et\" button during tloading wait.');
+                        }
+                    } catch (e) { }
+
+                    currentUrl = page.url();
+                    pageTitle = await page.title().catch(() => '');
+                    waited++;
+                }
+
+                if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) {
                     log.error('Still stuck on /cs/tloading page after timeout.');
+
+                    // DEBUG: Log the final state before failing
+                    const pageBody = await page.$eval('body', el => el.innerHTML.substring(0, 1000)).catch(() => 'No Body');
+                    log.error('Final tloading HTML state:', { html: pageBody });
+
                     if (session) session.markBad();
                     throw new Error('Stuck on /cs/tloading page');
                 }
@@ -468,7 +493,15 @@ async function handleCategoryPage(page, request, enqueueLinks) {
 
             if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) {
                 log.warning('Detected /cs/tloading redirect during selector wait. Waiting for resolution...');
-                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => { });
+
+                // Wait up to 30s
+                let waited = 0;
+                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor')) && waited < 30) {
+                    await randomDelay(1000, 1500);
+                    currentUrl = page.url();
+                    pageTitle = await page.title().catch(() => '');
+                    waited++;
+                }
 
                 log.info('Navigation complete. Retrying primary selector... Current URL: ' + page.url());
                 await page.waitForSelector(listingRowSelector, { timeout: 15000 }).catch(() => { });
