@@ -1,0 +1,89 @@
+{
+    "title": "Sahibinden Car Scraper",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrls": {
+            "title": "Start URLs",
+            "type": "array",
+            "description": "URLs of Sahibinden.com car category pages. Example: https://www.sahibinden.com/vasita/otomobil",
+            "editor": "requestListSources",
+            "prefill": [
+                {
+                    "url": "https://www.sahibinden.com/vasita/otomobil?sorting=date_desc"
+                }
+            ]
+        },
+        "maxItems": {
+            "title": "Max Items",
+            "type": "integer",
+            "description": "Maximum number of listings to scrape. Leave empty to scrape all available listings.",
+            "minimum": 1,
+            "nullable": true,
+            "sectionCaption": "Scraper Settings",
+            "sectionDescription": "Configure the scraper's execution parameters."
+        },
+        "includeDetails": {
+            "title": "Include Details",
+            "type": "boolean",
+            "description": "If true, it will open each listing's detail page to extract description, all properties, photos, and owner info. If false, it only extracts basic info from the list page.",
+            "default": false
+        },
+        "maxConcurrency": {
+            "title": "Max Concurrency",
+            "type": "integer",
+            "description": "Maximum number of pages to open concurrently. High values increase the risk of getting banned. Recommended: 3-5.",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10
+        },
+        "proxyConfiguration": {
+            "title": "Proxy Configuration",
+            "type": "object",
+            "description": "Proxy settings. Sahibinden.com requires RESIDENTIAL proxies.",
+            "editor": "proxy",
+            "prefill": {
+                "useApifyProxy": true,
+                "apifyProxyGroups": [
+                    "RESIDENTIAL"
+                ],
+                "countryCode": "TR"
+            },
+            "sectionCaption": "Proxy Settings",
+            "sectionDescription": "RESIDENTIAL proxy is mandatory due to Sahibinden.com's Cloudflare protection. TR countryCode is recommended."
+        },
+        "baseRowApiToken": {
+            "title": "BaseRow API Token",
+            "type": "string",
+            "description": "Optional: BaseRow API token to save data directly to a BaseRow table.",
+            "editor": "textfield",
+            "isSecret": true,
+            "sectionCaption": "BaseRow Integration (Optional)",
+            "sectionDescription": "Fill these fields if you want to push data directly to BaseRow."
+        },
+        "baseRowTableId": {
+            "title": "BaseRow Table ID",
+            "type": "string",
+            "description": "Optional: BaseRow Table ID.",
+            "editor": "textfield"
+        },
+        "baseRowDatabaseId": {
+            "title": "BaseRow Database ID",
+            "type": "string",
+            "description": "Optional: BaseRow Database ID.",
+            "editor": "textfield"
+        },
+        "sessionCookies": {
+            "title": "Session Cookies (JSON)",
+            "type": "array",
+            "description": "Paste your active Session Cookies JSON (exported from your browser using EditThisCookie or similar) to bypass the mandatory Sahibinden.com login screen.",
+            "editor": "json",
+            "default": [],
+            "sectionCaption": "Advanced Settings",
+            "sectionDescription": "Provide your personal account cookies to bypass the Sahibinden login route (sahibinden.com/giris)."
+        }
+    },
+    "required": [
+        "startUrls"
+    ]
+}

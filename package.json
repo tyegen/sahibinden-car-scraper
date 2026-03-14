@@ -1,0 +1,21 @@
+{
+    "name": "sahibinden-car-scraper",
+    "version": "1.0.0",
+    "description": "Sahibinden Car Scraper - Puppeteer + Stealth (JavaScript ESM)",
+    "main": "src/main.js",
+    "type": "module",
+    "dependencies": {
+        "apify": "^3.1.0",
+        "axios": "^1.6.0",
+        "crawlee": "^3.13.0",
+        "puppeteer": "*",
+        "puppeteer-extra": "latest",
+        "puppeteer-extra-plugin-stealth": "latest"
+    },
+    "scripts": {
+        "start": "node src/main.js",
+        "start:prod": "node src/main.js"
+    },
+    "author": "",
+    "license": "ISC"
+}

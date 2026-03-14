@@ -1,0 +1,8 @@
+node_modules/
+apify_storage/
+crawlee_storage/
+storage/
+.idea/
+.vscode/
+*.log
+sahibinden-emlak-scraper-plan.md

@@ -1,0 +1,12 @@
+{
+    "actorSpecification": 1,
+    "name": "sahibinden-car-scraper",
+    "title": "Sahibinden Car Scraper",
+    "description": "Extract car (vasıta/otomobil) listings from Turkey's largest classified ads portal. Built with Puppeteer + Stealth to bypass Cloudflare and mandatory login screens using dynamic session cookies.",
+    "version": "1.0",
+    "meta": {
+        "templateId": "js-crawlee-puppeteer-chrome"
+    },
+    "input": "./input_schema.json",
+    "dockerfile": "./Dockerfile"
+}
