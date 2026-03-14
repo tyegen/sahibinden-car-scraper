@@ -1,6 +1,6 @@
-# Sahibinden Real Estate Scraper 🏠
+# Sahibinden Car Scraper 🚗
 
-A powerful Apify Actor that scrapes real estate listings from Sahibinden.com (Turkey's largest classified ads platform). Extracts property details including price, location, size, rooms, building age, and more.
+The ultimate Sahibinden Car Scraper to extract otomobil listings bypassing Cloudflare (tloading) challenges and mandatory login walls. Retrieves Make, Series, Model, Year, KM, Color, Price, Location & Date accurately. Requires TR Residential Proxies and verified Session Cookies to operate.
 
 ## Features
 
@@ -16,7 +16,7 @@ A powerful Apify Actor that scrapes real estate listings from Sahibinden.com (Tu
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `startUrls` | Array | `satilik-daire/istanbul` | Sahibinden.com category page URLs |
+| `startUrls` | Array | `vasita/otomobil` | Sahibinden.com category page URLs |
 | `maxItems` | Integer | All | Maximum number of listings to scrape |
 | `includeDetails` | Boolean | `false` | Scrape detail pages for full info |
 | `maxConcurrency` | Integer | `3` | Max concurrent pages (3-5 recommended) |
@@ -28,14 +28,20 @@ A powerful Apify Actor that scrapes real estate listings from Sahibinden.com (Tu
 {
     "id": "1234567890",
     "url": "https://www.sahibinden.com/ilan/...",
-    "title": "3+1 Satılık Daire Kadıköy",
-    "price": 4500000,
+    "title": "2018 Ford Focus",
+    "make": "Ford",
+    "series": "Focus",
+    "model": "1.5 TDCi Titanium",
+    "year": "2018",
+    "km": "50.000",
+    "color": "Beyaz",
+    "price": 1200000,
     "price_currency": "TL",
     "location": "İstanbul / Kadıköy",
     "date": "21 Şubat 2026",
     "image": "https://...",
     "scrapedAt": "2026-02-21T12:00:00.000Z",
-    "sourceUrl": "https://www.sahibinden.com/satilik-daire/istanbul"
+    "sourceUrl": "https://www.sahibinden.com/vasita/otomobil"
 }
 ```
 
@@ -45,24 +51,18 @@ Additional fields when detail scraping is enabled:
 
 ```json
 {
-    "description": "Kadıköy merkezde...",
+    "description": "Boya, değişen, tramer yoktur...",
     "images": ["https://...", "https://..."],
-    "seller": "Emlak Ofisi",
-    "rooms": "3+1",
-    "size": "140 / 120",
-    "buildingAge": "5-10",
-    "floor": "3",
-    "totalFloors": "8",
-    "heating": "Doğalgaz",
-    "furnished": "Hayır",
-    "usage": "Boş",
-    "inSite": "Evet",
-    "dues": "500 TL",
-    "deedStatus": "Kat Mülkiyeti",
-    "creditEligible": "Evet",
+    "seller": "Galeriden",
+    "engineCapacity": "1401 - 1600 cm3",
+    "enginePower": "101 - 125 HP",
+    "fuel": "Dizel",
+    "gear": "Otomatik",
+    "damageRecord": "Yok",
+    "warranty": "Evet",
     "info": {
-        "Oda Sayısı": "3+1",
-        "Brüt / Net M2": "140 / 120",
+        "Motor Hacmi": "1401 - 1600 cm3",
+        "Motor Gücü": "101 - 125 HP",
         "...": "..."
     }
 }
@@ -72,13 +72,12 @@ Additional fields when detail scraping is enabled:
 
 ```
 # Category-based
-https://www.sahibinden.com/satilik-daire/istanbul
-https://www.sahibinden.com/kiralik-daire/aydin
-https://www.sahibinden.com/satilik-arsa/izmir
-https://www.sahibinden.com/satilik-villa/antalya
+https://www.sahibinden.com/vasita/otomobil/ford
+https://www.sahibinden.com/vasita/otomobil/audi
+https://www.sahibinden.com/vasita/arazi-suv-pickup
 
 # With filters
-https://www.sahibinden.com/satilik-daire/istanbul?sorting=date_desc&pagingSize=50
+https://www.sahibinden.com/vasita/otomobil/ford?sorting=date_desc&pagingSize=50
 ```
 
 ### Usage Example (API)
@@ -90,7 +89,7 @@ const client = new ApifyClient({ token: 'YOUR_API_TOKEN' });
 
 const input = {
     startUrls: [
-        { url: 'https://www.sahibinden.com/satilik-daire/istanbul?sorting=date_desc' }
+        { url: 'https://www.sahibinden.com/vasita/otomobil/ford?sorting=date_desc' }
     ],
     maxItems: 100,
     includeDetails: false,
@@ -106,7 +105,7 @@ const input = {
 };
 
 // Run the actor and wait for it to finish
-const run = await client.actor('YOUR_USERNAME/sahibinden-real-estate-scraper').call(input);
+const run = await client.actor('YOUR_USERNAME/sahibinden-car-scraper').call(input);
 ```
 
 ### ⚠️ Important Notes

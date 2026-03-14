@@ -49,6 +49,13 @@
                 ],
                 "countryCode": "TR"
             },
+            "default": {
+                "useApifyProxy": true,
+                "apifyProxyGroups": [
+                    "RESIDENTIAL"
+                ],
+                "countryCode": "TR"
+            },
             "sectionCaption": "Proxy Settings",
             "sectionDescription": "RESIDENTIAL proxy is mandatory due to Sahibinden.com's Cloudflare protection. TR countryCode is recommended."
         },
