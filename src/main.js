@@ -276,9 +276,27 @@ const crawler = new PuppeteerCrawler({
                     content.includes('cf-browser-verification') ||
                     content.includes('challenge-platform') ||
                     content.includes('Güvenlik doğrulaması gerçekleştirme') ||
-                    content.includes('Uyumsuz tarayıcı eklentisi')
+                    content.includes('Uyumsuz tarayıcı eklentisi') ||
+                    content.includes('Tarayıcınızı kontrol ediyoruz') ||
+                    content.includes('Devam Et')
                 ) {
-                    log.info('Cloudflare challenge page detected, waiting for resolution...');
+                    log.info('Cloudflare/Security challenge page detected, waiting for resolution...');
+
+                    // Check for "Devam Et" button and click it
+                    try {
+                        const devamEtClicked = await page.evaluate(() => {
+                            const buttons = Array.from(document.querySelectorAll('button, a, input[type=\"submit\"], div'));
+                            const targetBtn = buttons.find(b => b.textContent && b.textContent.includes('Devam Et'));
+                            if (targetBtn) {
+                                targetBtn.click();
+                                return true;
+                            }
+                            return false;
+                        });
+                        if (devamEtClicked) {
+                            log.info('Clicked \"Devam Et\" button.');
+                        }
+                    } catch (e) { }
 
                     // Wait for navigation (Cloudflare auto-redirects after solving)
                     try {
@@ -345,6 +363,25 @@ const crawler = new PuppeteerCrawler({
                 }
                 log.info(`Successfully passed /cs/tloading. Now on: ${currentUrl}`);
             }
+
+            // Check for "Devam Et" button challenge
+            try {
+                const devamEtClicked = await page.evaluate(() => {
+                    const buttons = Array.from(document.querySelectorAll('button, a, input[type=\"submit\"], div.btn, span.btn'));
+                    const targetBtn = buttons.find(b => b.textContent && b.textContent.includes('Devam Et'));
+                    if (targetBtn) {
+                        targetBtn.click();
+                        return true;
+                    }
+                    return false;
+                });
+
+                if (devamEtClicked) {
+                    log.warning('Detected and clicked \"Devam Et\" challenge button. Waiting for navigation...');
+                    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => { });
+                    log.info('Successfully passed \"Devam Et\" challenge. Now on: ' + page.url());
+                }
+            } catch (e) { }
 
             // Additional Cloudflare check on page content
             const pageContent = await page.content();
