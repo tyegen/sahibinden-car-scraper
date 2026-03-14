@@ -629,11 +629,30 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                 // Extract thumbnail image
                 const image = await element.$eval('img', el => el.src || el.dataset?.src || null).catch(() => null);
 
-                // Try to extract column-specific data (m², rooms etc.) from the table cells
-                // Sahibinden emlak listing columns vary by category, so we extract all td cells
-                const cellTexts = await element.$$eval('td', cells =>
+                // Use Sahibinden's specific CSS classes instead of raw td index, because columns shift
+                // based on how deep the category URL is (e.g. Make/Series columns disappear in deep categories)
+                const tagAttributes = await element.$$eval('td.searchResultsTagAttributeValue', cells =>
                     cells.map(cell => cell.textContent?.trim() || '')
                 ).catch(() => []);
+
+                const attributes = await element.$$eval('td.searchResultsAttributeValue', cells =>
+                    cells.map(cell => cell.textContent?.trim() || '')
+                ).catch(() => []);
+
+                // Determine make/series/model based on how many tag attributes are visible
+                let make = null, series = null, model = null;
+                if (tagAttributes.length === 3) {
+                    [make, series, model] = tagAttributes;
+                } else if (tagAttributes.length === 2) {
+                    [series, model] = tagAttributes;
+                } else if (tagAttributes.length === 1) {
+                    model = tagAttributes[0];
+                }
+
+                // Attributes are consistently Year, KM, Color
+                const year = attributes[0] || null;
+                const km = attributes[1] || null;
+                const color = attributes[2] || null;
 
                 // Extract listing ID from URL
                 const id = extractListingId(detailUrl);
@@ -642,12 +661,12 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                     id: id,
                     url: detailUrl,
                     title: normalizeText(title),
-                    make: cellTexts[1] ? normalizeText(cellTexts[1]) : null,
-                    series: cellTexts[2] ? normalizeText(cellTexts[2]) : null,
-                    model: cellTexts[3] ? normalizeText(cellTexts[3]) : null,
-                    year: cellTexts[5] ? normalizeText(cellTexts[5]) : null,
-                    km: cellTexts[6] ? normalizeText(cellTexts[6]) : null,
-                    color: cellTexts[7] ? normalizeText(cellTexts[7]) : null,
+                    make: make ? normalizeText(make) : null,
+                    series: series ? normalizeText(series) : null,
+                    model: model ? normalizeText(model) : null,
+                    year: year ? normalizeText(year) : null,
+                    km: km ? normalizeText(km) : null,
+                    color: color ? normalizeText(color) : null,
                     price: formatPrice(priceText),
                     price_currency: extractCurrency(priceText),
                     price_raw: priceText,
