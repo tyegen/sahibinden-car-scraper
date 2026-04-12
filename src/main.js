@@ -1,4 +1,4 @@
-// src/main.js - Sahibinden.com Emlak Scraper
+// src/main.js - Sahibinden.com Car Scraper
 import { Actor } from 'apify';
 import { PuppeteerCrawler, log } from 'crawlee';
 import puppeteer from 'puppeteer-extra';
@@ -22,7 +22,7 @@ await Actor.init();
 // Get input
 const input = await Actor.getInput() || {};
 const {
-    startUrls = [{ url: 'https://www.sahibinden.com/satilik-daire/istanbul?sorting=date_desc' }],
+    startUrls = [{ url: 'https://www.sahibinden.com/vasita/otomobil?sorting=date_desc' }],
     maxItems = null,
     includeDetails = false,
     maxConcurrency = 3,
@@ -37,17 +37,17 @@ const {
     baseRowDatabaseId,
     // Session Cookies for login bypass
     sessionCookies = [],
+    // Debug mode
+    debugMode = false,
 } = input;
 
 // Force RESIDENTIAL proxy with TR country code
-// Even if user provides partial proxy config, ensure RESIDENTIAL is used
 const finalProxyConfiguration = {
     useApifyProxy: true,
     apifyProxyGroups: ['RESIDENTIAL'],
     countryCode: 'TR',
     ...(proxyConfiguration || {}),
 };
-// Always ensure RESIDENTIAL is in the groups
 if (!finalProxyConfiguration.apifyProxyGroups || finalProxyConfiguration.apifyProxyGroups.length === 0) {
     finalProxyConfiguration.apifyProxyGroups = ['RESIDENTIAL'];
 }
@@ -58,14 +58,28 @@ if (!finalProxyConfiguration.countryCode) {
 // Create the proxy configuration
 const proxyConfig = await Actor.createProxyConfiguration(finalProxyConfiguration);
 
-log.info('Starting Sahibinden Emlak Scraper', {
+const cookieNames = (sessionCookies || []).map(c => c.name);
+const hasCfClearanceInput = cookieNames.includes('cf_clearance');
+const hasPxCookies = ['_px3', '_pxhd', '_pxvid', 'pxcts'].some(n => cookieNames.includes(n));
+
+log.info('Starting Sahibinden Car Scraper', {
     startUrls: startUrls.map(u => typeof u === 'string' ? u : u.url),
     maxItems,
     includeDetails,
     maxConcurrency,
     proxyGroups: finalProxyConfiguration.apifyProxyGroups,
     countryCode: finalProxyConfiguration.countryCode,
+    sessionCookiesProvided: cookieNames.length,
+    cookieNames,
+    hasCfClearance: hasCfClearanceInput,
+    hasPerimeterXCookies: hasPxCookies,
 });
+
+if (!hasPxCookies) {
+    log.warning('No PerimeterX cookies provided (_px3, _pxhd, _pxvid, pxcts). ' +
+        'If sahibinden shows a "Basılı Tutun" challenge, the actor will try to hold it automatically. ' +
+        'For reliable bypass: visit sahibinden.com in your browser, solve the hold challenge, then export ALL cookies.');
+}
 
 if (proxyConfig) {
     log.info('Using proxy configuration', {
@@ -87,10 +101,127 @@ try {
 
 let scrapedItemsCount = 0;
 
-// Store for detail page data (keyed by URL)
-const detailDataStore = {};
+// =============================================
+// HELPER FUNCTIONS
+// =============================================
 
-// Create the Puppeteer crawler
+// Check if page content is a Cloudflare challenge page
+function isChallengedPage(html) {
+    return (
+        html.includes('Just a moment') ||
+        html.includes('Checking your browser') ||
+        html.includes('cf-browser-verification') ||
+        html.includes('challenge-platform') ||
+        html.includes('Güvenlik doğrulaması gerçekleştirme') ||
+        html.includes('Bir dakika lütfen') ||
+        html.includes('Uyumsuz tarayıcı eklentisi')
+    );
+}
+
+// Check if page content is a PerimeterX "press and hold" challenge
+function isPxHoldChallenge(html) {
+    return (
+        html.includes('Basılı Tutun') ||
+        html.includes('px-captcha') ||
+        html.includes('_pxCaptcha') ||
+        html.includes('PerimeterX') ||
+        html.includes('Bağlantınız kontrol ediliyor') ||
+        html.includes('human-challenge')
+    );
+}
+
+// Attempt to solve the PerimeterX press-and-hold challenge programmatically
+async function tryHoldPxButton(page) {
+    try {
+        const selectors = [
+            '#px-captcha',
+            '.px-captcha-container',
+            'div[id^="px-captcha"]',
+            'button',
+        ];
+
+        let holdTarget = null;
+        for (const sel of selectors) {
+            holdTarget = await page.$(sel).catch(() => null);
+            if (holdTarget) {
+                log.info(`Found PX hold target with selector: ${sel}`);
+                break;
+            }
+        }
+
+        if (!holdTarget) {
+            log.warning('Could not find PX hold button element.');
+            return false;
+        }
+
+        const box = await holdTarget.boundingBox();
+        if (!box) {
+            log.warning('PX hold button has no bounding box (not visible?)');
+            return false;
+        }
+
+        const cx = box.x + box.width / 2;
+        const cy = box.y + box.height / 2;
+
+        log.info(`Attempting PX hold at (${Math.round(cx)}, ${Math.round(cy)}) for 10s...`);
+
+        // Move to button naturally
+        await page.mouse.move(cx - 50, cy - 30);
+        await new Promise(r => setTimeout(r, 300));
+        await page.mouse.move(cx, cy, { steps: 10 });
+        await new Promise(r => setTimeout(r, 200));
+
+        // Hold down for 10 seconds
+        await page.mouse.down();
+        await new Promise(r => setTimeout(r, 10000));
+        await page.mouse.up();
+
+        log.info('Released PX hold button, waiting for redirect...');
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+
+        const afterHtml = await page.content();
+        if (isPxHoldChallenge(afterHtml) || isChallengedPage(afterHtml)) {
+            log.warning('PX hold did not resolve the challenge.');
+            return false;
+        }
+
+        log.info('PX hold challenge resolved successfully!');
+        return true;
+    } catch (e) {
+        log.warning(`PX hold attempt error: ${e.message}`);
+        return false;
+    }
+}
+
+let debugCounter = 0;
+async function saveDebugInfo(page, label) {
+    if (!debugMode) return;
+    const idx = ++debugCounter;
+    const key = `DEBUG-${String(idx).padStart(3, '0')}-${label}`;
+    try {
+        const screenshot = await page.screenshot({ fullPage: true, type: 'png' });
+        await Actor.setValue(`${key}-screenshot`, screenshot, { contentType: 'image/png' });
+        log.info(`[DEBUG] Screenshot saved → KV store key: "${key}-screenshot"`);
+    } catch (e) {
+        log.warning(`[DEBUG] Could not save screenshot: ${e.message}`);
+    }
+    try {
+        const html = await page.content();
+        await Actor.setValue(`${key}-html`, html, { contentType: 'text/html' });
+        log.info(`[DEBUG] HTML saved → KV store key: "${key}-html" (${html.length} chars)`);
+    } catch (e) {
+        log.warning(`[DEBUG] Could not save HTML: ${e.message}`);
+    }
+    try {
+        const cookies = await page.cookies();
+        const cookieSummary = cookies.map(c => `${c.name}=${c.value.substring(0, 20)}... (expires: ${c.expires})`);
+        log.info(`[DEBUG] Cookies at "${label}":`, { cookies: cookieSummary });
+    } catch (e) { }
+}
+
+// =============================================
+// CREATE THE PUPPETEER CRAWLER
+// =============================================
 const crawler = new PuppeteerCrawler({
     proxyConfiguration: proxyConfig,
     maxConcurrency,
@@ -116,7 +247,7 @@ const crawler = new PuppeteerCrawler({
     launchContext: {
         launcher: puppeteer,
         launchOptions: {
-            headless: process.env.HEADLESS !== 'false', // allow debugging with HEADLESS=false
+            headless: process.env.HEADLESS !== 'false',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -125,79 +256,194 @@ const crawler = new PuppeteerCrawler({
                 '--disable-infobars',
                 '--window-size=1920,1080',
                 '--start-maximized',
-                // Additional stealth flags
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--disable-site-isolation-trials',
             ],
             ignoreDefaultArgs: ['--enable-automation'],
         },
-        useChrome: true, // often better for stealth than chromium
+        useChrome: true,
     },
 
     preNavigationHooks: [
-        async ({ page, request }, gotoOptions) => {
-            // Apply session cookies if provided
-            if (sessionCookies && Array.isArray(sessionCookies) && sessionCookies.length > 0) {
+        async ({ page, request, session }, gotoOptions) => {
+            // Inject user-provided session cookies — but only ONCE per session.
+            // After the first request, CF/PX set fresh cookies in the browser.
+            // Re-injecting on every request overwrites those fresh cookies with older
+            // originals, breaking subsequent requests (e.g. detail pages after category).
+            const nowSecs = Date.now() / 1000;
+            const alreadyInjected = session?.userData?.cookiesInjected === true;
+            if (!alreadyInjected && sessionCookies && Array.isArray(sessionCookies) && sessionCookies.length > 0) {
                 try {
-                    // Puppeteer expects cookies without generic attributes sometimes, formatting them
-                    const formattedCookies = sessionCookies.map(c => ({
-                        name: c.name,
-                        value: c.value,
-                        domain: c.domain || '.sahibinden.com',
-                        path: c.path || '/',
-                        secure: c.secure !== false,
-                        httpOnly: c.httpOnly === true,
-                        sameSite: c.sameSite || 'Lax'
-                    }));
-                    await page.setCookie(...formattedCookies);
-                    log.debug(`Injected ${formattedCookies.length} session cookies.`);
+                    const validCookies = sessionCookies.filter(c => {
+                        const expiry = c.expirationDate ?? c.expires ?? null;
+                        if (expiry && expiry < nowSecs) {
+                            log.debug(`Skipping expired cookie: ${c.name}`);
+                            return false;
+                        }
+                        return true;
+                    });
+
+                    if (validCookies.length < sessionCookies.length) {
+                        log.warning(`Filtered ${sessionCookies.length - validCookies.length} expired cookies. ` +
+                            `If cf_clearance expired, the scraper will earn a fresh one via session pre-warm.`);
+                    }
+
+                    if (validCookies.length > 0) {
+                        const formattedCookies = validCookies.map(c => ({
+                            name: c.name,
+                            value: c.value,
+                            domain: c.domain || '.sahibinden.com',
+                            path: c.path || '/',
+                            secure: c.secure !== false,
+                            httpOnly: c.httpOnly === true,
+                            sameSite: c.sameSite === 'no_restriction' ? 'None' : (c.sameSite || 'Lax'),
+                        }));
+                        await page.setCookie(...formattedCookies);
+                        log.info(`Injected ${formattedCookies.length} valid session cookies: ${formattedCookies.map(c => c.name).join(', ')}`);
+                        if (session) session.userData = { ...session.userData, cookiesInjected: true };
+                    } else {
+                        log.warning('All provided sessionCookies were expired — none injected. Please export fresh cookies from your browser.');
+                    }
                 } catch (e) {
                     log.warning(`Failed to inject session cookies: ${e.message}`);
                 }
+            } else if (alreadyInjected) {
+                log.debug('Session already has cookies from previous request — skipping re-injection to preserve fresh CF/PX cookies.');
             }
 
-            const ua = randomUserAgent();
+            // Check if we have a valid cf_clearance (from either input cookies or session pool)
+            const allCurrentCookies = await page.cookies('https://www.sahibinden.com').catch(() => []);
+            const cfClearanceCookie = allCurrentCookies.find(c => c.name === 'cf_clearance');
+            const hasValidCfClearance = cfClearanceCookie
+                ? (!cfClearanceCookie.expires || cfClearanceCookie.expires === -1 || cfClearanceCookie.expires > nowSecs)
+                : false;
+
+            if (cfClearanceCookie) {
+                const expiry = cfClearanceCookie.expires;
+                const expiresIn = expiry && expiry !== -1 ? Math.round((expiry - nowSecs) / 60) : null;
+                log.info(`cf_clearance cookie found. expires in: ${expiresIn !== null ? expiresIn + ' min' : 'session'}, valid: ${hasValidCfClearance}`);
+            } else {
+                log.info('No cf_clearance cookie present in page context.');
+            }
+
+            // Pre-warm: navigate to homepage BEFORE target URL to earn cf_clearance.
+            // Only runs once per session (tracked via session.userData.warmedUp).
+            if (!hasValidCfClearance && !session?.userData?.warmedUp) {
+                log.info('No valid cf_clearance found — pre-warming session via homepage...');
+                try {
+                    await page.goto('https://www.sahibinden.com', {
+                        waitUntil: 'networkidle2',
+                        timeout: 60000,
+                    });
+                    const warmContent = await page.content();
+                    if (isChallengedPage(warmContent)) {
+                        log.info('CF challenge on homepage during pre-warm, waiting for auto-resolution...');
+                        await saveDebugInfo(page, 'prewarm-challenge');
+                        try {
+                            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+                            const afterWarm = await page.content();
+                            if (isChallengedPage(afterWarm)) {
+                                log.warning('Pre-warm CF challenge did not resolve. Will attempt target URL anyway.');
+                                await saveDebugInfo(page, 'prewarm-challenge-unresolved');
+                            } else {
+                                log.info('Pre-warm CF challenge resolved.');
+                            }
+                        } catch (e) {
+                            log.warning(`Pre-warm CF challenge wait timed out: ${e.message}`);
+                        }
+                    } else {
+                        log.info('Pre-warm homepage loaded successfully (no challenge).');
+                    }
+                    if (session) session.userData = { ...session.userData, warmedUp: true };
+                    await randomDelay(1500, 3000);
+                } catch (e) {
+                    log.warning(`Session pre-warm failed: ${e.message}`);
+                }
+            } else if (hasValidCfClearance) {
+                log.debug('Valid cf_clearance present, skipping pre-warm.');
+            }
+
+            // Use a stable user agent for this session.
+            // cf_clearance is tied to the UA that earned it — changing UA between requests
+            // (category page → detail pages) causes CF to challenge every detail page.
+            let ua = session?.userData?.userAgent;
+            if (!ua) {
+                ua = randomUserAgent();
+                if (session) session.userData = { ...session.userData, userAgent: ua };
+                log.debug(`Assigned user agent for session: ${ua}`);
+            }
             await page.setUserAgent(ua);
-            await page.setExtraHTTPHeaders({
+
+            // Derive sec-ch-ua version from the UA string so they stay consistent.
+            // Only Chrome/Edge UAs send sec-ch-ua; skip the header for Firefox/Safari.
+            const chromeVerMatch = ua.match(/Chrome\/(\d+)/);
+
+            // For detail pages, simulate a same-origin navigation from the category page.
+            // CF checks Sec-Fetch-Site and Referer — a direct navigation ('none') to a
+            // /ilan/*/detay URL is highly suspicious; same-origin navigation is normal.
+            const requestLabel = request.userData?.label;
+            const isDetailPage = requestLabel === 'DETAIL';
+            const sourceUrl = request.userData?.listingData?.sourceUrl;
+
+            const extraHeaders = {
                 'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-Site': isDetailPage ? 'same-origin' : 'none',
                 'Sec-Fetch-User': '?1',
                 'Upgrade-Insecure-Requests': '1',
-                'sec-ch-ua': '"Not A(Brand";v="99", "Google Chrome";v="121", "Chromium";v="121"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-            });
+            };
+            if (isDetailPage && sourceUrl) {
+                extraHeaders['Referer'] = sourceUrl;
+            }
+            if (chromeVerMatch) {
+                const v = chromeVerMatch[1];
+                extraHeaders['sec-ch-ua'] = `"Not A(Brand";v="99", "Google Chrome";v="${v}", "Chromium";v="${v}"`;
+                extraHeaders['sec-ch-ua-mobile'] = '?0';
+                extraHeaders['sec-ch-ua-platform'] = '"Windows"';
+            }
+            await page.setExtraHTTPHeaders(extraHeaders);
 
-            // Keep the viewport consistent with the window size to avoid detection
-            const width = 1920;
-            const height = 1080;
-            await page.setViewport({ width, height });
+            // Extra delay before detail pages — burst of navigations triggers CF/PX rate limits.
+            if (isDetailPage) {
+                await randomDelay(4000, 8000);
+            }
 
-            // Advanced stealth overrides
+            await page.setViewport({ width: 1920, height: 1080 });
+
+            // Advanced stealth overrides — run before any page JS
             await page.evaluateOnNewDocument(() => {
-                // Pass webdriver check
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined,
-                });
+                Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 
-                // Pass chrome check
                 window.chrome = {
                     runtime: {},
                     loadTimes: function () { },
                     csi: function () { },
-                    app: {}
+                    app: {},
                 };
 
-                // Pass permissions check
                 const originalQuery = window.navigator.permissions.query;
                 window.navigator.permissions.query = parameters => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({ state: Notification.permission }) :
-                        originalQuery(parameters)
+                    parameters.name === 'notifications'
+                        ? Promise.resolve({ state: Notification.permission })
+                        : originalQuery(parameters)
                 );
+
+                // Realistic navigator properties (PerimeterX checks these)
+                Object.defineProperty(navigator, 'languages', { get: () => ['tr-TR', 'tr', 'en-US', 'en'] });
+                Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+                Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+                Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+                Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+
+                // Screen properties consistent with viewport
+                Object.defineProperty(screen, 'width', { get: () => 1920 });
+                Object.defineProperty(screen, 'height', { get: () => 1080 });
+                Object.defineProperty(screen, 'availWidth', { get: () => 1920 });
+                Object.defineProperty(screen, 'availHeight', { get: () => 1040 });
+                Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
+                Object.defineProperty(screen, 'pixelDepth', { get: () => 24 });
 
                 // Mock plugins
                 Object.defineProperty(navigator, 'plugins', {
@@ -205,41 +451,23 @@ const crawler = new PuppeteerCrawler({
                         const plugins = [
                             { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
                             { name: 'Chrome PDF Viewer', filename: 'mhjimihiapuabedfglidnhagcfenogec', description: '' },
-                            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' }
+                            { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
                         ];
-
-                        // Add mock methods expected from the PluginArray
                         plugins.item = (i) => plugins[i];
                         plugins.namedItem = (name) => plugins.find(p => p.name === name);
                         plugins.refresh = () => { };
-
-                        // Fake the iterator
-                        plugins[Symbol.iterator] = function* () {
-                            yield* Object.values(plugins);
-                        };
-
-                        // Inherit from PluginArray
+                        plugins[Symbol.iterator] = function* () { yield* Object.values(plugins); };
                         Object.setPrototypeOf(plugins, PluginArray.prototype);
-
                         return plugins;
-                    }
+                    },
                 });
 
-                // Mock languages
-                Object.defineProperty(navigator, 'languages', { get: () => ['tr-TR', 'tr', 'en-US', 'en'] });
-
-                // Add dummy WebGL functions to thwart fingerprinting
-                const getParameter = WebGLRenderingContext.getParameter;
+                // WebGL fingerprint spoofing
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
                 WebGLRenderingContext.prototype.getParameter = function (parameter) {
-                    // UNMASKED_VENDOR_WEBGL
-                    if (parameter === 37445) {
-                        return 'Intel Inc.';
-                    }
-                    // UNMASKED_RENDERER_WEBGL
-                    if (parameter === 37446) {
-                        return 'Intel Iris OpenGL Engine';
-                    }
-                    return getParameter(parameter);
+                    if (parameter === 37445) return 'Intel Inc.';
+                    if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                    return getParameter.call(this, parameter);
                 };
             });
 
@@ -251,81 +479,102 @@ const crawler = new PuppeteerCrawler({
     ],
 
     postNavigationHooks: [
-        async ({ page, response, request, session, log }) => {
+        async ({ page, response, request, session }) => {
             const statusCode = response?.status();
             log.info(`Response status: ${statusCode} for ${request.url}`);
 
-            // If we got 403, wait for Cloudflare challenge to resolve
             if (statusCode === 403 || statusCode === 503 || statusCode === 429) {
-                log.warning(`Got ${statusCode}, waiting for Cloudflare challenge to resolve...`);
+                log.warning(`Got ${statusCode} for ${request.url} — checking page content...`);
+                await saveDebugInfo(page, `${statusCode}-initial`);
 
-                // Wait for Cloudflare JS to execute and redirect
                 await randomDelay(5000, 10000);
 
-                // Simulate human movement
                 try {
                     await page.mouse.move(100 + Math.random() * 500, 100 + Math.random() * 500);
                     await page.mouse.move(200 + Math.random() * 500, 200 + Math.random() * 500);
                 } catch (e) { }
 
-                // Check if we're on a Cloudflare challenge page
                 const content = await page.content();
-                if (
-                    content.includes('Just a moment') ||
-                    content.includes('Checking your browser') ||
-                    content.includes('cf-browser-verification') ||
-                    content.includes('challenge-platform') ||
-                    content.includes('Güvenlik doğrulaması gerçekleştirme') ||
-                    content.includes('Uyumsuz tarayıcı eklentisi') ||
-                    content.includes('Tarayıcınızı kontrol ediyoruz') ||
-                    content.includes('Devam Et')
-                ) {
-                    log.info('Cloudflare/Security challenge page detected, waiting for resolution...');
+
+                if (isPxHoldChallenge(content)) {
+                    // PerimeterX "press and hold" challenge
+                    log.info('PerimeterX hold challenge detected — attempting automated hold...');
+                    await saveDebugInfo(page, `${statusCode}-px-hold`);
+                    const pxSolved = await tryHoldPxButton(page);
+                    if (!pxSolved) {
+                        log.warning('PerimeterX hold challenge failed. Provide _px3/_pxhd/_pxvid/pxcts cookies from your browser to bypass this.');
+                        await saveDebugInfo(page, `${statusCode}-px-hold-failed`);
+                        if (session) session.markBad();
+                        throw new Error('PerimeterX hold challenge not resolved');
+                    }
+                } else if (isChallengedPage(content)) {
+                    log.info('Cloudflare challenge page detected, waiting for auto-resolution...');
+                    await saveDebugInfo(page, `${statusCode}-challenge`);
 
                     // Check for "Devam Et" button and click it
                     try {
                         const devamEtClicked = await page.evaluate(() => {
-                            const buttons = Array.from(document.querySelectorAll('button, a, input[type=\"submit\"], div'));
+                            const buttons = Array.from(document.querySelectorAll('button, a, input[type="submit"], div'));
                             const targetBtn = buttons.find(b => b.textContent && b.textContent.includes('Devam Et'));
-                            if (targetBtn) {
-                                targetBtn.click();
-                                return true;
-                            }
+                            if (targetBtn) { targetBtn.click(); return true; }
                             return false;
                         });
-                        if (devamEtClicked) {
-                            log.info('Clicked \"Devam Et\" button.');
-                        }
+                        if (devamEtClicked) log.info('Clicked "Devam Et" button.');
                     } catch (e) { }
 
-                    // Wait for navigation (Cloudflare auto-redirects after solving)
                     try {
-                        await page.waitForNavigation({
-                            waitUntil: 'networkidle2',
-                            timeout: 45000, // increased timeout for solving
-                        });
-                        log.info('Cloudflare challenge resolved!');
+                        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+
+                        const resolvedContent = await page.content();
+                        if (isPxHoldChallenge(resolvedContent)) {
+                            log.info('CF resolved but now hit PX hold challenge — attempting hold...');
+                            await saveDebugInfo(page, `${statusCode}-cf-then-px`);
+                            const pxSolved = await tryHoldPxButton(page);
+                            if (!pxSolved) {
+                                if (session) session.markBad();
+                                throw new Error('PerimeterX hold challenge not resolved after CF');
+                            }
+                        } else if (isChallengedPage(resolvedContent)) {
+                            log.warning('Cloudflare challenge navigated to another challenge page. Marking session bad.');
+                            await saveDebugInfo(page, `${statusCode}-challenge-still-blocked`);
+                            if (session) session.markBad();
+                            throw new Error('Cloudflare Turnstile challenge requires manual verification');
+                        } else {
+                            log.info('Cloudflare challenge resolved!');
+                        }
                     } catch (e) {
+                        if (e.message.includes('Turnstile') || e.message.includes('PerimeterX')) throw e;
                         log.warning('Cloudflare challenge did not resolve in time. Retrying...');
+                        await saveDebugInfo(page, `${statusCode}-challenge-timeout`);
                         if (session) session.markBad();
                         throw new Error('Cloudflare challenge timeout');
                     }
                 } else {
-                    // True 403 block, mark session as bad and retry
-                    log.warning('Received 403 without recognized Cloudflare challenge. Marking session as bad.');
+                    log.warning('Received 403 without recognized challenge page. Marking session as bad.');
+                    await saveDebugInfo(page, `${statusCode}-unknown-block`);
                     if (session) session.markBad();
                     throw new Error(`Blocked with status ${statusCode}`);
                 }
             }
 
-            // Validate we're on the right page
+            // Detect tloading / checkLoading page (200 but JS redirect page)
             const currentUrl = page.url();
-            if (currentUrl.includes('/giris') || currentUrl.includes('secure.sahibinden.com')) {
+            if (currentUrl.includes('/cs/tloading') || currentUrl.includes('/cs/checkLoading')) {
+                log.info('Detected tloading/checkLoading protection page, waiting for JS redirect...');
+                try {
+                    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+                    log.info(`tloading resolved, now at: ${page.url()}`);
+                } catch (e) {
+                    log.warning('tloading page did not redirect in time. Marking session bad and retrying.');
+                    if (session) session.markBad();
+                    throw new Error('tloading page did not resolve');
+                }
+            }
+
+            // Validate we're not on the login page
+            if (page.url().includes('/giris') || page.url().includes('secure.sahibinden.com')) {
                 log.error('Redirected to login page. Your session cookies are missing or expired.');
                 if (session) session.markBad();
-
-                // We must abort the whole crawl if login is required but cookies are invalid,
-                // otherwise it'll just burn through proxies and retries uselessly.
                 throw new Error('Mandatory login required. Please update the sessionCookies input.');
             }
 
@@ -343,32 +592,26 @@ const crawler = new PuppeteerCrawler({
         await randomDelay(2000, 5000);
 
         try {
-            // Check for Sahibinden's internal /cs/tloading redirect challenge
+            // Belt-and-suspenders tloading check inside requestHandler
+            // (postNavHook handles it too, but this loop is more thorough)
             let currentUrl = page.url();
             let pageTitle = await page.title().catch(() => '');
 
-            if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) {
-                log.warning('Detected /cs/tloading or /cs/checkLoading intermediate page. Waiting for automatic redirect...');
+            if (currentUrl.includes('/cs/tloading') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Yükleniyor') || pageTitle.includes('Bir dakika')) {
+                log.warning('Detected intermediate page in requestHandler. Waiting for automatic redirect...');
 
-                // Wait for up to 30 seconds for the URL to change
                 let waited = 0;
-                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) && waited < 30) {
-                    await randomDelay(1000, 1500); // Wait 1-1.5 seconds
+                while ((currentUrl.includes('/cs/tloading') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Yükleniyor') || pageTitle.includes('Bir dakika')) && waited < 30) {
+                    await randomDelay(1000, 1500);
 
-                    // Periodically try to click "Devam Et" button if it appears on this page
                     try {
                         const devamEtClicked = await page.evaluate(() => {
-                            const buttons = Array.from(document.querySelectorAll('button, a, input[type=\"submit\"], div'));
+                            const buttons = Array.from(document.querySelectorAll('button, a, input[type="submit"], div'));
                             const targetBtn = buttons.find(b => b.textContent && b.textContent.includes('Devam Et'));
-                            if (targetBtn) {
-                                targetBtn.click();
-                                return true;
-                            }
+                            if (targetBtn) { targetBtn.click(); return true; }
                             return false;
                         });
-                        if (devamEtClicked) {
-                            log.info('Clicked \"Devam Et\" button during tloading wait.');
-                        }
+                        if (devamEtClicked) log.info('Clicked "Devam Et" button during tloading wait.');
                     } catch (e) { }
 
                     currentUrl = page.url();
@@ -376,54 +619,34 @@ const crawler = new PuppeteerCrawler({
                     waited++;
                 }
 
-                if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) {
-                    log.error('Still stuck on intermediate page after timeout.');
-
-                    // DEBUG: Log the final state before failing
-                    const pageBody = await page.$eval('body', el => el.innerHTML.substring(0, 1000)).catch(() => 'No Body');
-                    log.error('Final intermediate HTML state:', { html: pageBody });
-
+                if (currentUrl.includes('/cs/tloading') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Yükleniyor') || pageTitle.includes('Bir dakika')) {
+                    await saveDebugInfo(page, 'tloading-stuck');
                     if (session) session.markBad();
                     throw new Error('Stuck on intermediate loading page');
                 }
                 log.info(`Successfully passed intermediate page. Now on: ${currentUrl}`);
             }
 
-            // Check for "Devam Et" button challenge
-            try {
-                const devamEtClicked = await page.evaluate(() => {
-                    const buttons = Array.from(document.querySelectorAll('button, a, input[type=\"submit\"], div.btn, span.btn'));
-                    const targetBtn = buttons.find(b => b.textContent && b.textContent.includes('Devam Et'));
-                    if (targetBtn) {
-                        targetBtn.click();
-                        return true;
-                    }
-                    return false;
-                });
-
-                if (devamEtClicked) {
-                    log.warning('Detected and clicked \"Devam Et\" challenge button. Waiting for navigation...');
-                    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => { });
-                    log.info('Successfully passed \"Devam Et\" challenge. Now on: ' + page.url());
-                }
-            } catch (e) { }
-
-            // Additional Cloudflare check on page content
+            // Additional CF/PX content check
             const pageContent = await page.content();
-            if (
-                pageContent.includes('Checking your browser') ||
-                pageContent.includes('cf-browser-verification') ||
-                pageContent.includes('Just a moment')
-            ) {
-                log.warning('Cloudflare challenge still present in page, waiting...');
+            if (isPxHoldChallenge(pageContent)) {
+                log.info('PerimeterX challenge detected in requestHandler — attempting hold...');
+                await saveDebugInfo(page, 'px-hold-in-handler');
+                const pxSolved = await tryHoldPxButton(page);
+                if (!pxSolved) {
+                    if (session) session.markBad();
+                    throw new Error('PerimeterX hold challenge not resolved in requestHandler');
+                }
+            } else if (isChallengedPage(pageContent)) {
+                log.warning('Cloudflare challenge still present in requestHandler, waiting...');
+                await saveDebugInfo(page, 'cf-challenge-in-handler');
                 await randomDelay(8000, 15000);
                 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => { });
 
-                // Recheck
                 const newContent = await page.content();
-                if (newContent.includes('Just a moment') || newContent.includes('Checking your browser')) {
+                if (isChallengedPage(newContent) || isPxHoldChallenge(newContent)) {
                     if (session) session.markBad();
-                    throw new Error('Cloudflare challenge not resolved');
+                    throw new Error('Challenge not resolved in requestHandler');
                 }
             }
 
@@ -454,7 +677,6 @@ const crawler = new PuppeteerCrawler({
 // CRITICAL: Override Crawlee's internal blocked request check
 // Crawlee hardcodes 403 as "blocked" and throws BEFORE requestHandler runs,
 // even when our postNavigationHook successfully resolves the Cloudflare challenge.
-// We handle 403/503 ourselves in postNavigationHooks.
 const originalThrowOnBlocked = crawler._throwOnBlockedRequest?.bind(crawler);
 if (originalThrowOnBlocked) {
     crawler._throwOnBlockedRequest = function (session, statusCode) {
@@ -481,22 +703,21 @@ async function handleCategoryPage(page, request, enqueueLinks) {
     const nextPageSelector = 'a.prevNextBut[title="Sonraki"]:not(.passive)';
 
     try {
-        // Try the main selector first
         let listingElements = [];
         try {
             await page.waitForSelector(listingRowSelector, { timeout: 15000 });
             listingElements = await page.$$(listingRowSelector);
+            if (debugMode) await saveDebugInfo(page, 'category-loaded');
         } catch (e) {
             // Check if we got redirected to tloading during the wait
             let currentUrl = page.url();
             let pageTitle = await page.title().catch(() => '');
 
-            if (currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) {
+            if (currentUrl.includes('/cs/tloading') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Yükleniyor') || pageTitle.includes('Bir dakika')) {
                 log.warning('Detected intermediate redirect during selector wait. Waiting for resolution...');
 
-                // Wait up to 30s
                 let waited = 0;
-                while ((currentUrl.includes('/cs/tloading') || pageTitle.includes('Yükleniyor') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Bir dakika')) && waited < 30) {
+                while ((currentUrl.includes('/cs/tloading') || currentUrl.includes('/cs/checkLoading') || pageTitle.includes('Yükleniyor') || pageTitle.includes('Bir dakika')) && waited < 30) {
                     await randomDelay(1000, 1500);
                     currentUrl = page.url();
                     pageTitle = await page.title().catch(() => '');
@@ -510,25 +731,12 @@ async function handleCategoryPage(page, request, enqueueLinks) {
 
             if (listingElements.length === 0) {
                 log.warning(`Primary selector failed: ${listingRowSelector}`);
+                await saveDebugInfo(page, 'category-selector-failed');
 
-                // DEBUG: Capture page state for analysis
                 const pageTitleDebug = await page.title().catch(() => 'unknown');
                 const currentUrlDebug = page.url();
-                const bodyHTML = await page.$eval('body', el => el.innerHTML.substring(0, 3000)).catch(() => 'Could not get HTML');
+                log.info('Page state when selector failed:', { title: pageTitleDebug, url: currentUrlDebug });
 
-                log.info('DEBUG Page state:', { title: pageTitleDebug, url: currentUrlDebug });
-                log.info('DEBUG HTML preview (first 2000 chars):', { html: bodyHTML.substring(0, 2000) });
-
-                // Save screenshot to key-value store for debugging
-                try {
-                    const screenshot = await page.screenshot({ fullPage: true, type: 'png' });
-                    await Actor.setValue('DEBUG-screenshot', screenshot, { contentType: 'image/png' });
-                    log.info('DEBUG: Screenshot saved to key-value store as "DEBUG-screenshot"');
-                } catch (screenshotErr) {
-                    log.warning('Could not save debug screenshot');
-                }
-
-                // Try alternative selectors
                 const alternativeSelectors = [
                     'table.searchResultsTable tr.searchResultsItem',
                     '.searchResultsRowClass .searchResultsItem',
@@ -549,13 +757,11 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                 }
 
                 if (listingElements.length === 0) {
-                    // Log all table elements on the page
                     const tableCount = await page.$$eval('table', tables => tables.length).catch(() => 0);
                     const trCount = await page.$$eval('tr', rows => rows.length).catch(() => 0);
                     const tbodyCount = await page.$$eval('tbody', bodies => bodies.length).catch(() => 0);
                     log.info('DEBUG: Page structure', { tables: tableCount, rows: trCount, tbodies: tbodyCount });
 
-                    // Log all class names containing "search" or "result"
                     const searchClasses = await page.evaluate(() => {
                         const allElements = document.querySelectorAll('*');
                         const classes = new Set();
@@ -574,8 +780,8 @@ async function handleCategoryPage(page, request, enqueueLinks) {
 
                     throw new Error('No listing elements found with any selector');
                 }
-            } // end if listingElements.length === 0
-        } // end catch (e)
+            }
+        }
 
         log.info(`Found ${listingElements.length} listings on page.`);
 
@@ -586,7 +792,6 @@ async function handleCategoryPage(page, request, enqueueLinks) {
             if (maxItems !== null && scrapedItemsCount >= maxItems) {
                 log.info(`Maximum items limit (${maxItems}) reached. Stopping scrape.`);
 
-                // Push any currently collected results before aborting
                 if (results.length > 0) {
                     await Actor.pushData(results);
                     if (baseRowIntegration) {
@@ -629,6 +834,10 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                 // Extract thumbnail image
                 const image = await element.$eval('img', el => el.src || el.dataset?.src || null).catch(() => null);
 
+                // Use data-id attribute directly — more reliable than regex on the URL
+                const id = await element.evaluate(el => el.getAttribute('data-id')).catch(() => null)
+                    ?? extractListingId(detailUrl);
+
                 // Use Sahibinden's specific CSS classes instead of raw td index, because columns shift
                 // based on how deep the category URL is (e.g. Make/Series columns disappear in deep categories)
                 const tagAttributes = await element.$$eval('td.searchResultsTagAttributeValue', cells =>
@@ -654,11 +863,8 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                 const km = attributes[1] || null;
                 const color = attributes[2] || null;
 
-                // Extract listing ID from URL
-                const id = extractListingId(detailUrl);
-
                 const listingData = {
-                    id: id,
+                    id,
                     url: detailUrl,
                     title: normalizeText(title),
                     make: make ? normalizeText(make) : null,
@@ -672,7 +878,7 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                     price_raw: priceText,
                     location: normalizeText(location),
                     date: normalizeText(date),
-                    image: image,
+                    image,
                     scrapedAt: new Date().toISOString(),
                     sourceUrl: request.url,
                 };
@@ -683,7 +889,7 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                         urls: [detailUrl],
                         userData: {
                             label: 'DETAIL',
-                            listingData: listingData,
+                            listingData,
                         },
                     });
                     // Don't push to dataset yet — will push from detail handler
@@ -703,7 +909,6 @@ async function handleCategoryPage(page, request, enqueueLinks) {
             await Actor.pushData(results);
             log.info(`Pushed ${results.length} listings from page. Total scraped: ${scrapedItemsCount}`);
 
-            // Store in BaseRow if configured
             if (baseRowIntegration) {
                 try {
                     await baseRowIntegration.storeListings(results);
@@ -730,8 +935,6 @@ async function handleCategoryPage(page, request, enqueueLinks) {
                 urls: [absoluteNextPageUrl],
                 userData: { label: 'CATEGORY' },
             });
-
-            // Small delay before next page
             await randomDelay(1000, 3000);
         } else {
             log.info(`No next page button found on ${request.url}`);
@@ -749,13 +952,13 @@ async function handleCategoryPage(page, request, enqueueLinks) {
 async function handleDetailPage(page, request) {
     log.info(`Handling detail page: ${request.url}`);
 
-    // Get the base listing data passed from the category page
     const listingData = request.userData?.listingData || {};
 
     try {
-        // Wait for the page to load
         await page.waitForSelector('body', { timeout: 30000 });
         await randomDelay(1000, 3000);
+
+        if (debugMode) await saveDebugInfo(page, 'detail-loaded');
 
         // Extract description
         const description = await page.$eval('#classifiedDescription', el => {
@@ -783,7 +986,6 @@ async function handleDetailPage(page, request) {
             imgs => imgs.map(img => img.src || img.dataset?.src).filter(Boolean)
         ).catch(() => []);
 
-        // Deduplicate images
         const uniqueImages = [...new Set(images)];
 
         // Extract seller info
@@ -798,15 +1000,14 @@ async function handleDetailPage(page, request) {
             el => el.textContent?.replace(/[^0-9]/g, '')
         ).catch(() => null);
 
-        // Build the complete listing data
         const completeData = {
             ...listingData,
             id: listingData.id || pageId || extractListingId(request.url),
             description: normalizeText(description),
             images: uniqueImages,
             seller: seller ? normalizeText(seller) : null,
-            info: info,
-            // Extract commonly needed fields from info for convenience
+            info,
+            // Extract commonly needed car fields from info for convenience
             make: info['Marka'] || listingData.make || null,
             series: info['Seri'] || listingData.series || null,
             model: info['Model'] || listingData.model || null,
@@ -825,12 +1026,10 @@ async function handleDetailPage(page, request) {
             fromWho: info['Kimden'] || null,
         };
 
-        // Push to dataset
         await Actor.pushData(completeData);
         scrapedItemsCount++;
         log.info(`Pushed detail data for listing ${completeData.id}. Total scraped: ${scrapedItemsCount}`);
 
-        // Store in BaseRow if configured
         if (baseRowIntegration) {
             try {
                 await baseRowIntegration.storeListing(completeData);
@@ -839,7 +1038,6 @@ async function handleDetailPage(page, request) {
             }
         }
 
-        // Check maxItems
         if (maxItems !== null && scrapedItemsCount >= maxItems) {
             log.info(`Maximum items limit (${maxItems}) reached.`);
             await crawler.autoscaledPool?.abort();
@@ -876,7 +1074,8 @@ const startRequests = (Array.isArray(startUrls) ? startUrls : [startUrls]).map(i
         return null;
     }
 
-    return { url: urlString, userData: { label: 'CATEGORY' } };
+    const isDetailUrl = urlString.includes('/ilan/') && urlString.includes('/detay');
+    return { url: urlString, userData: { label: isDetailUrl ? 'DETAIL' : 'CATEGORY' } };
 }).filter(req => req !== null);
 
 if (startRequests.length > 0) {

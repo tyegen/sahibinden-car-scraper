@@ -88,6 +88,12 @@
             "default": [],
             "sectionCaption": "Advanced Settings",
             "sectionDescription": "Provide your personal account cookies to bypass the Sahibinden login route (sahibinden.com/giris)."
+        },
+        "debugMode": {
+            "title": "Debug Mode",
+            "type": "boolean",
+            "description": "Enable debug mode to save screenshots and HTML snapshots to the Key-Value store whenever the scraper is blocked or encounters a challenge. Useful for diagnosing Cloudflare/PerimeterX issues. Disable in production.",
+            "default": false
         }
     },
     "required": [

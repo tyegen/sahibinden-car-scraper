@@ -2,7 +2,7 @@ import axios from 'axios';
 import { Actor, log } from 'apify';
 
 /**
- * BaseRow integration for storing scraped emlak (real estate) listings
+ * BaseRow integration for storing scraped car listings
  */
 export class BaseRowIntegration {
     /**
@@ -35,8 +35,8 @@ export class BaseRowIntegration {
     }
 
     /**
-     * Store a single emlak listing in BaseRow
-     * @param {Object} listingData Emlak listing data
+     * Store a single car listing in BaseRow
+     * @param {Object} listingData Car listing data
      * @returns {Promise<Object>} Created row data
      */
     async storeListing(listingData) {
@@ -60,8 +60,8 @@ export class BaseRowIntegration {
     }
 
     /**
-     * Store multiple emlak listings in BaseRow
-     * @param {Array<Object>} listings Array of emlak listing data
+     * Store multiple car listings in BaseRow
+     * @param {Array<Object>} listings Array of car listing data
      * @returns {Promise<Array<Object>>} Created/updated row data
      */
     async storeListings(listings) {
@@ -149,8 +149,8 @@ export class BaseRowIntegration {
     }
 
     /**
-     * Prepare emlak data for BaseRow
-     * @param {Object} data Emlak listing data
+     * Prepare car listing data for BaseRow
+     * @param {Object} data Car listing data
      * @returns {Object} Prepared row data
      * @private
      */
@@ -161,23 +161,28 @@ export class BaseRowIntegration {
             title: data.title || '',
             price: data.price || 0,
             price_currency: data.price_currency || 'TL',
+            price_raw: data.price_raw || '',
             location: data.location || '',
             description: data.description || '',
             date: data.date || '',
 
-            // Emlak-specific fields
-            rooms: data.rooms || data.info?.['Oda Sayısı'] || '',
-            size: data.size || data.info?.['Brüt / Net M2'] || data.info?.['m² (Brüt)'] || '',
-            building_age: data.buildingAge || data.info?.['Bina Yaşı'] || '',
-            floor: data.floor || data.info?.['Bulunduğu Kat'] || '',
-            total_floors: data.totalFloors || data.info?.['Kat Sayısı'] || '',
-            heating: data.heating || data.info?.['Isınma'] || '',
-            furnished: data.furnished || data.info?.['Eşyalı'] || '',
-            usage_status: data.usage || data.info?.['Kullanım Durumu'] || '',
-            in_site: data.inSite || data.info?.['Site İçinde'] || '',
-            dues: data.dues || data.info?.['Aidat'] || '',
-            deed_status: data.deedStatus || data.info?.['Tapu Durumu'] || '',
-            credit_eligible: data.creditEligible || data.info?.['Krediye Uygun'] || '',
+            // Car-specific fields
+            make: data.make || data.info?.['Marka'] || '',
+            series: data.series || data.info?.['Seri'] || '',
+            model: data.model || data.info?.['Model'] || '',
+            year: data.year || data.info?.['Yıl'] || '',
+            km: data.km || data.info?.['KM'] || '',
+            color: data.color || data.info?.['Renk'] || '',
+            fuel: data.fuel || data.info?.['Yakıt'] || '',
+            gear: data.gear || data.info?.['Vites'] || '',
+            body_type: data.bodyType || data.info?.['Kasa Tipi'] || '',
+            engine_power: data.enginePower || data.info?.['Motor Gücü'] || '',
+            engine_capacity: data.engineCapacity || data.info?.['Motor Hacmi'] || '',
+            traction: data.traction || data.info?.['Çekiş'] || '',
+            warranty: data.warranty || data.info?.['Garanti'] || '',
+            damage_record: data.damageRecord || data.info?.['Ağır Hasar Kayıtlı'] || data.info?.['Hasar Durumu'] || '',
+            plate: data.plate || data.info?.['Plaka / Uyruk'] || '',
+            from_who: data.fromWho || data.info?.['Kimden'] || '',
             seller: data.seller || '',
 
             // Images as JSON string
@@ -195,7 +200,7 @@ export class BaseRowIntegration {
 
 /**
  * Create BaseRow integration from Actor input
- * @returns {Promise<BaseRowIntegration|null>} BaseRow integration instance or null
+ * @returns {Promise<BaseRowIntegration|null>} BaseRow integration instance or null if not configured
  */
 export async function createBaseRowIntegration() {
     const input = await Actor.getInput() || {};

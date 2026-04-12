@@ -106,7 +106,11 @@ export function parseYesNo(value) {
  */
 export function normalizeText(text) {
     if (!text) return '';
-    return text.replace(/\s+/g, ' ').trim();
+    let result = text.replace(/\s+/g, ' ').trim();
+    // Fix UTF-8 bytes misread as Latin-1 (mojibake) — common with Turkish characters
+    // e.g. "Ã¼" (C3 BC read as Latin-1) → "ü" (correct UTF-8)
+    try { result = decodeURIComponent(escape(result)); } catch (e) { }
+    return result;
 }
 
 /**
@@ -116,7 +120,8 @@ export function normalizeText(text) {
  */
 export function extractListingId(url) {
     if (!url) return null;
-    // Sahibinden URLs end with the listing ID, e.g. /ilan/satilik-daire-xxx-1234567890/detay
-    const match = url.match(/\/(\d{8,12})/);
+    // Sahibinden URLs: /ilan/some-slug-1234567890/detay
+    // The ID is 8-12 digits at the end of the slug, immediately followed by /detay or end of string.
+    const match = url.match(/(\d{8,12})(?:\/|$)/);
     return match ? match[1] : null;
 }
