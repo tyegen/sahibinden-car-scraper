@@ -627,7 +627,9 @@ const crawler = new PuppeteerCrawler({
                 log.info(`Successfully passed intermediate page. Now on: ${currentUrl}`);
             }
 
-            // Additional CF/PX content check
+            // Additional CF/PX content check — use only definitive CF-exclusive strings here
+            // (the broader isChallengedPage() includes Turkish strings like "Bir dakika lütfen"
+            // that can appear in normal Sahibinden page content and cause false positives)
             const pageContent = await page.content();
             if (isPxHoldChallenge(pageContent)) {
                 log.info('PerimeterX challenge detected in requestHandler — attempting hold...');
@@ -637,14 +639,23 @@ const crawler = new PuppeteerCrawler({
                     if (session) session.markBad();
                     throw new Error('PerimeterX hold challenge not resolved in requestHandler');
                 }
-            } else if (isChallengedPage(pageContent)) {
+            } else if (
+                pageContent.includes('Just a moment') ||
+                pageContent.includes('Checking your browser') ||
+                pageContent.includes('cf-browser-verification')
+            ) {
                 log.warning('Cloudflare challenge still present in requestHandler, waiting...');
                 await saveDebugInfo(page, 'cf-challenge-in-handler');
                 await randomDelay(8000, 15000);
                 await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => { });
 
                 const newContent = await page.content();
-                if (isChallengedPage(newContent) || isPxHoldChallenge(newContent)) {
+                if (
+                    newContent.includes('Just a moment') ||
+                    newContent.includes('Checking your browser') ||
+                    newContent.includes('cf-browser-verification') ||
+                    isPxHoldChallenge(newContent)
+                ) {
                     if (session) session.markBad();
                     throw new Error('Challenge not resolved in requestHandler');
                 }
