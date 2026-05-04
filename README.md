@@ -1,5 +1,19 @@
 # Sahibinden Car Scraper 🚗
 
+## 🤖 Copy to your AI assistant
+Copy this block into ChatGPT, Claude, Cursor, or any LLM to start using this actor.
+
+```text
+tyegen/sahibinden-car-scraper on Apify. Call: ApifyClient("TOKEN").actor("tyegen/sahibinden-car-scraper").call(run_input={"startUrls": [{"url": "URL_HERE"}]}), then client.dataset(run["defaultDatasetId"]).list_items().items for results.
+```
+
+> **🚨 CRITICAL REQUIREMENT FOR USERS: SESSION COOKIES 🚨**
+> 
+> Sahibinden.com has extremely aggressive anti-bot protection and frequently redirects new proxy IPs to a mandatory login page. 
+> 
+> **To prevent constant TIMEOUTS or empty results, you MUST inject your personal Session Cookie into the actor's input.** 
+> Use an extension like `EditThisCookie` to export your session from a real browser and paste it into the `sessionCookies` field before running.
+
 The ultimate Sahibinden Car Scraper to extract otomobil listings bypassing Cloudflare (tloading) challenges and mandatory login walls. Retrieves Make, Series, Model, Year, KM, Color, Price, Location & Date accurately. Requires TR Residential Proxies and verified Session Cookies to operate.
 
 ## Features
